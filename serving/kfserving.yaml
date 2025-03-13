@@ -1,0 +1,148 @@
+apiVersion: serving.kubeflow.org/v1beta1
+kind: InferenceService
+metadata:
+  name: model-predictor
+  namespace: kubeflow
+  annotations:
+    serving.kubeflow.org/deploymentMode: Serverless
+    serving.kubeflow.org/autoscalerClass: hpa
+    serving.kubeflow.org/autoscalerMetric: concurrency
+    serving.kubeflow.org/autoscalerTarget: "1"
+    serving.kubeflow.org/minReplicas: "1"
+    serving.kubeflow.org/maxReplicas: "3"
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8080"
+spec:
+  predictor:
+    # サービスアカウント名
+    serviceAccountName: kfserving-sa
+    # スケーリング設定
+    minReplicas: 1
+    maxReplicas: 3
+    # ノードセレクタ（GPUインスタンスを使用する場合）
+    # nodeSelector:
+    #   cloud.google.com/gke-accelerator: nvidia-tesla-t4
+    
+    # scikit-learnモデル設定
+    sklearn:
+      # モデルストレージパス
+      # PVCをストレージソースとして指定する例
+      storageUri: "pvc://models-pvc/sklearn/model"
+      # リソース制限
+      resources:
+        limits:
+          cpu: "1"
+          memory: 2Gi
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+      
+    # XGBoostモデルの設定例
+    # xgboost:
+    #   storageUri: "pvc://models-pvc/xgboost/model"
+    #   resources:
+    #     limits:
+    #       cpu: "1"
+    #       memory: 2Gi
+
+    # TensorFlowモデルの設定例
+    # tensorflow:
+    #   storageUri: "pvc://models-pvc/tensorflow/model"
+    #   resources:
+    #     limits:
+    #       cpu: "1"
+    #       memory: 2Gi
+
+    # ONNXモデルの設定例
+    # onnx:
+    #   storageUri: "pvc://models-pvc/onnx/model"
+    #   resources:
+    #     limits:
+    #       cpu: "1"
+    #       memory: 2Gi
+      
+    # カスタムコンテナの設定例
+    # container:
+    #   image: gcr.io/project/custom-model:v1
+    #   port: 9000
+    #   env:
+    #     - name: MODEL_NAME
+    #       value: "custom-model"
+    #   resources:
+    #     limits:
+    #       cpu: "1"
+    #       memory: 2Gi
+
+  # トランスフォーマーコンポーネント（前処理）の設定例
+  # transformer:
+  #   minReplicas: 1
+  #   maxReplicas: 2
+  #   container:
+  #     image: gcr.io/project/transformer:v1
+  #     resources:
+  #       limits:
+  #         cpu: "1"
+  #         memory: 1Gi
+
+  # 説明可能性コンポーネントの設定例
+  # explainer:
+  #   minReplicas: 1
+  #   alibi:
+  #     type: AnchorTabular
+  #     storageUri: "pvc://models-pvc/explainer"
+  #     resources:
+  #       limits:
+  #         cpu: "1"
+  #         memory: 1Gi
+
+---
+# PVCの定義（モデルストレージ用）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc
+  namespace: kubeflow
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# KFServingサービスアカウント
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kfserving-sa
+  namespace: kubeflow
+
+---
+# KFServingサービスアカウントに必要な権限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kfserving-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+- apiGroups: ["serving.kubeflow.org"]
+  resources: ["inferenceservices", "inferenceservices/status"]
+  verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kfserving-binding
+subjects:
+- kind: ServiceAccount
+  name: kfserving-sa
+  namespace: kubeflow
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kfserving-role

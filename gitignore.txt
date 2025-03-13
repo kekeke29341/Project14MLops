@@ -1,0 +1,115 @@
+# Python関連
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+
+# 仮想環境
+venv/
+env/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# ログ・データファイル
+*.log
+logs/
+*.csv
+*.tsv
+*.parquet
+*.xlsx
+*.h5
+*.pkl
+*.db
+*.sqlite
+*.sqlite3
+
+# 機械学習モデル
+*.pth
+*.pt
+*.onnx
+*.tflite
+*.pb
+*.ckpt
+saved_models/
+checkpoints/
+
+# IDE・エディタ関連
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# MLOps特有
+.env
+.envrc
+credentials.json
+.kubeconfig
+.kube/
+kubeconfig
+mlruns/
+mlflow/
+.tensorboard-info/
+.dvc/
+
+# Terraform関連
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraformrc
+terraform.rc
+
+# Airflow関連
+airflow.db
+airflow.cfg
+airflow/logs/
+airflow/plugins/
+airflow/dags/__pycache__/
+webserver_config.py
+
+# Kubeflow関連
+kubeflow-*
+kfapp/
+.kfp/
+
+# Istio関連
+istio-*/
+
+# Helm関連
+.helm/
+charts/*.tgz
+
+# 特定のディレクトリを除外するが、.gitkeepファイルがあるディレクトリは保持
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+
+# 一時ファイル
+*.tmp
+*.temp
+.cache/
+*.bak

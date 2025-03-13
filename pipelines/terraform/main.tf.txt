@@ -1,0 +1,309 @@
+# MLOps環境のためのTerraform設定
+# クラウドインフラストラクチャの構築
+
+# プロバイダーの設定
+provider "aws" {
+  region = var.aws_region
+}
+
+# 変数定義
+variable "aws_region" {
+  description = "AWSのリージョン"
+  type        = string
+  default     = "ap-northeast-1"
+}
+
+variable "project_name" {
+  description = "プロジェクト名"
+  type        = string
+  default     = "mlops-platform"
+}
+
+variable "environment" {
+  description = "環境名（dev, staging, prod）"
+  type        = string
+  default     = "dev"
+}
+
+variable "eks_cluster_version" {
+  description = "EKSクラスターのKubernetesバージョン"
+  type        = string
+  default     = "1.27"
+}
+
+variable "eks_node_instance_type" {
+  description = "EKSノードのインスタンスタイプ"
+  type        = string
+  default     = "t3.large"
+}
+
+variable "eks_node_desired_capacity" {
+  description = "EKSノードグループの希望するノード数"
+  type        = number
+  default     = 2
+}
+
+variable "eks_node_max_capacity" {
+  description = "EKSノードグループの最大ノード数"
+  type        = number
+  default     = 5
+}
+
+variable "eks_node_min_capacity" {
+  description = "EKSノードグループの最小ノード数"
+  type        = number
+  default     = 2
+}
+
+# ローカル変数
+locals {
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "terraform"
+  }
+  
+  name_prefix = "${var.project_name}-${var.environment}"
+}
+
+# VPCの作成
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.1.2"
+
+  name = "${local.name_prefix}-vpc"
+  cidr = "10.0.0.0/16"
+
+  azs             = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+  enable_nat_gateway     = true
+  single_nat_gateway     = true
+  one_nat_gateway_per_az = false
+  enable_vpn_gateway     = false
+
+  tags = local.tags
+}
+
+# S3バケット（データストレージ用）
+resource "aws_s3_bucket" "data_bucket" {
+  bucket = "${local.name_prefix}-data"
+  
+  tags = local.tags
+}
+
+resource "aws_s3_bucket_versioning" "data_bucket_versioning" {
+  bucket = aws_s3_bucket.data_bucket.id
+  
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# S3バケット（MLflowアーティファクト用）
+resource "aws_s3_bucket" "mlflow_artifacts" {
+  bucket = "${local.name_prefix}-mlflow-artifacts"
+  
+  tags = local.tags
+}
+
+# RDS PostgreSQL（MLflowメタストア用）
+resource "aws_db_subnet_group" "mlflow_db_subnet_group" {
+  name       = "${local.name_prefix}-mlflow-db-subnet"
+  subnet_ids = module.vpc.private_subnets
+  
+  tags = local.tags
+}
+
+resource "aws_security_group" "mlflow_db_sg" {
+  name        = "${local.name_prefix}-mlflow-db-sg"
+  description = "Security group for MLflow database"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = module.vpc.private_subnets_cidr_blocks
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  tags = local.tags
+}
+
+resource "aws_db_instance" "mlflow_db" {
+  identifier             = "${local.name_prefix}-mlflow-db"
+  allocated_storage      = 20
+  engine                 = "postgres"
+  engine_version         = "14.7"
+  instance_class         = "db.t3.micro"
+  db_name                = "mlflow"
+  username               = "mlflow"
+  password               = "mlflow-password" # 本番環境では適切なパスワード管理を行うこと
+  db_subnet_group_name   = aws_db_subnet_group.mlflow_db_subnet_group.name
+  vpc_security_group_ids = [aws_security_group.mlflow_db_sg.id]
+  skip_final_snapshot    = true
+  
+  tags = local.tags
+}
+
+# EKSクラスター
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "19.16.0"
+  
+  cluster_name    = "${local.name_prefix}-cluster"
+  cluster_version = var.eks_cluster_version
+  
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+  
+  # IAMロールの設定
+  cluster_endpoint_private_access = true
+  cluster_endpoint_public_access  = true
+  
+  # ノードグループの設定
+  eks_managed_node_groups = {
+    main = {
+      desired_size = var.eks_node_desired_capacity
+      max_size     = var.eks_node_max_capacity
+      min_size     = var.eks_node_min_capacity
+      
+      instance_types = [var.eks_node_instance_type]
+      capacity_type  = "ON_DEMAND"
+      
+      labels = {
+        Environment = var.environment
+      }
+      
+      tags = local.tags
+    }
+    
+    gpu = {
+      desired_size = 0
+      max_size     = 2
+      min_size     = 0
+      
+      instance_types = ["g4dn.xlarge"]
+      capacity_type  = "ON_DEMAND"
+      
+      labels = {
+        Environment = var.environment
+        gpu         = "true"
+      }
+      
+      taints = [{
+        key    = "nvidia.com/gpu"
+        value  = "true"
+        effect = "NO_SCHEDULE"
+      }]
+      
+      tags = local.tags
+    }
+  }
+  
+  tags = local.tags
+}
+
+# ECRリポジトリ
+resource "aws_ecr_repository" "model_repo" {
+  name                 = "${local.name_prefix}-models"
+  image_tag_mutability = "MUTABLE"
+  
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  
+  tags = local.tags
+}
+
+# ECRリポジトリポリシー
+resource "aws_ecr_repository_policy" "model_repo_policy" {
+  repository = aws_ecr_repository.model_repo.name
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid    = "AllowPull",
+        Effect = "Allow",
+        Principal = {
+          Service = "eks.amazonaws.com"
+        },
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability"
+        ]
+      }
+    ]
+  })
+}
+
+# CloudWatch Logs
+resource "aws_cloudwatch_log_group" "eks_logs" {
+  name              = "/aws/eks/${local.name_prefix}-cluster/cluster"
+  retention_in_days = 90
+  
+  tags = local.tags
+}
+
+# CloudWatch Logs（Fluentd用）
+resource "aws_cloudwatch_log_group" "fluentd_logs" {
+  name              = "/aws/eks/${local.name_prefix}-cluster/fluentd"
+  retention_in_days = 90
+  
+  tags = local.tags
+}
+
+# EKSクラスターのプロファイルをローカルのkubeconfigに追加
+resource "null_resource" "update_kubeconfig" {
+  depends_on = [module.eks]
+  
+  provisioner "local-exec" {
+    command = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region}"
+  }
+}
+
+# 出力値
+output "vpc_id" {
+  description = "VPC ID"
+  value       = module.vpc.vpc_id
+}
+
+output "eks_cluster_name" {
+  description = "EKSクラスター名"
+  value       = module.eks.cluster_name
+}
+
+output "eks_cluster_endpoint" {
+  description = "EKSクラスターエンドポイント"
+  value       = module.eks.cluster_endpoint
+}
+
+output "data_bucket_name" {
+  description = "データバケット名"
+  value       = aws_s3_bucket.data_bucket.bucket
+}
+
+output "mlflow_artifacts_bucket_name" {
+  description = "MLflowアーティファクトバケット名"
+  value       = aws_s3_bucket.mlflow_artifacts.bucket
+}
+
+output "mlflow_db_endpoint" {
+  description = "MLflow DBエンドポイント"
+  value       = aws_db_instance.mlflow_db.endpoint
+}
+
+output "ecr_repository_url" {
+  description = "ECRリポジトリURL"
+  value       = aws_ecr_repository.model_repo.repository_url
+}

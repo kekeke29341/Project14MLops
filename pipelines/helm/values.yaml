@@ -1,0 +1,369 @@
+# MLOps Platform Helm Chart - デフォルト値
+
+# グローバル設定
+global:
+  environment: dev
+  storageClass: gp2
+  domain: mlops.example.com
+  adminEmail: admin@example.com
+
+# コンポーネントの有効/無効化
+airflow:
+  enabled: true
+mlflow:
+  enabled: true
+prometheus:
+  enabled: true
+grafana:
+  enabled: true
+istio:
+  enabled: true
+kfserving:
+  enabled: true
+
+# Apache Airflow設定
+airflow:
+  # 基本設定
+  airflowVersion: 2.7.1
+  executor: CeleryExecutor
+  fernetKey: "" # 自動生成される
+  
+  # Webサーバー設定
+  webserver:
+    defaultUser:
+      enabled: true
+      role: Admin
+      username: admin
+      email: ${global.adminEmail}
+      firstName: Admin
+      lastName: User
+      password: admin  # 本番環境では変更すること
+    
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    
+    service:
+      type: ClusterIP
+      port: 8080
+    
+    ingress:
+      enabled: true
+      annotations:
+        kubernetes.io/ingress.class: istio
+      hosts:
+        - name: airflow.${global.domain}
+          path: /
+  
+  # スケジューラー設定
+  scheduler:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+  
+  # ワーカー設定
+  workers:
+    replicas: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1.5Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  
+  # 永続化設定
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ${global.storageClass}
+  
+  # PostgreSQL設定
+  postgresql:
+    enabled: true
+    persistence:
+      size: 8Gi
+    postgresqlPassword: airflow  # 本番環境では変更すること
+  
+  # DAGファイルの設定
+  dags:
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: ${global.storageClass}
+    gitSync:
+      enabled: false
+
+# MLflow設定
+mlflow:
+  # 基本設定
+  replicaCount: 2
+  
+  # イメージ設定
+  image:
+    repository: ghcr.io/mlflow/mlflow
+    tag: v2.8.0
+    pullPolicy: IfNotPresent
+  
+  # リソース設定
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # サービス設定
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Ingress設定
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: istio
+    hosts:
+      - host: mlflow.${global.domain}
+        paths:
+          - path: /
+            pathType: Prefix
+  
+  # バックエンド設定
+  backendStore:
+    databaseConnectionString: "postgresql://mlflow:mlflow-password@mlflow-db:5432/mlflow"
+  
+  # アーティファクト設定
+  artifactRoot:
+    path: s3://mlflow-artifacts/
+  
+  # S3アクセス設定
+  s3:
+    enabled: true
+    bucket: mlflow-artifacts
+    region: ap-northeast-1
+  
+  # 永続化設定
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ${global.storageClass}
+
+# Prometheus設定
+prometheus:
+  # 基本設定
+  alertmanager:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ${global.storageClass}
+  
+  # サーバー設定
+  server:
+    replicaCount: 1
+    retention: 15d
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+      storageClass: ${global.storageClass}
+    
+    # 基本設定
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # グローバルスクレイプ設定
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    # ingress設定
+    ingress:
+      enabled: true
+      annotations:
+        kubernetes.io/ingress.class: istio
+      hosts:
+        - prometheus.${global.domain}
+  
+  # PushGateway設定
+  pushgateway:
+    enabled: true
+  
+  # ServiceMonitor設定
+  serviceMonitorSelector:
+    matchLabels:
+      release: ${.Release.Name}
+
+# Grafana設定
+grafana:
+  # 基本設定
+  replicas: 1
+  
+  # 管理者設定
+  adminUser: admin
+  adminPassword: admin  # 本番環境では変更すること
+  
+  # 永続化設定
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ${global.storageClass}
+  
+  # リソース設定
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  
+  # サービス設定
+  service:
+    type: ClusterIP
+  
+  # Ingress設定
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: istio
+    hosts:
+      - grafana.${global.domain}
+  
+  # データソース設定
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-server.prometheus:80
+          access: proxy
+          isDefault: true
+  
+  # ダッシュボード設定
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+  
+  dashboards:
+    default:
+      ml-monitoring:
+        gnetId: 12239
+        revision: 1
+        datasource: Prometheus
+      kubernetes-cluster:
+        gnetId: 6417
+        revision: 1
+        datasource: Prometheus
+
+# Istio設定
+istio-base:
+  global:
+    tag: 1.18.1
+    hub: docker.io/istio
+
+istiod:
+  global:
+    tag: 1.18.1
+    hub: docker.io/istio
+  
+  pilot:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 2Gi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+
+istio-ingress:
+  global:
+    tag: 1.18.1
+    hub: docker.io/istio
+  
+  gateways:
+    istio-ingressgateway:
+      autoscaleEnabled: true
+      autoscaleMin: 1
+      autoscaleMax: 3
+      
+      # サービス設定
+      service:
+        type: LoadBalancer
+        ports:
+          - name: http2
+            port: 80
+            targetPort: 8080
+          - name: https
+            port: 443
+            targetPort: 8443
+      
+      # リソース設定
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+
+# KFServing設定
+kfserving:
+  # 基本設定
+  deploymentMode: Serverless
+  
+  # リソース設定
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  
+  # サービスアカウント設定
+  serviceAccountName: kfserving-sa
+  
+  # Ingress設定
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: istio
+    gateway: kubeflow-gateway
+    
+  # マルチモデル設定
+  predictors:
+    tensorflow:
+      enabled: true
+    sklearn:
+      enabled: true
+    xgboost:
+      enabled: true
+    pytorch:
+      enabled: true
+    onnx:
+      enabled: true
